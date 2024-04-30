@@ -1,0 +1,270 @@
+---
+title: "Meitong Chen"
+date: "2/20/2024"
+output: html_document
+---
+
+### Set up
+
+```{r, message=FALSE}
+library(readr)
+library(glmnet)
+library(tidyverse)
+```
+
+```{r}
+cars = read_csv("Cars_Data.csv")
+head(cars, 5)
+```
+
+```{r}
+y = cars$`Overall Preference`
+x = cars[, 2:16]
+n = nrow(cars)
+```
+
+```{r}
+x = as.matrix(x)
+```
+
+```{r}
+x_df = as.data.frame(x)
+```
+
+### Shrinkage Regression
+
+```{r}
+alpha = seq(from = 0, to = 1, by = 0.1)
+```
+
+```{r}
+results_en = data.frame(alpha = numeric(), mse = numeric(), lambda.min = numeric())
+```
+
+```{r, warning=FALSE}
+# Warning says less than 3 obs in one fold, it is recommended to use LOOCV.
+
+for (a in alpha) {
+  set.seed(42)
+  
+  cv.en = cv.glmnet(x, y, type.measure = "mse", nfolds = nrow(x), alpha = a) 
+  
+  lambda_min_index = match(cv.en$lambda.min, cv.en$lambda)
+  
+  results_en = rbind(results_en, data.frame(alpha = a, 
+                                      mse = cv.en$cvm[lambda_min_index], 
+                                      lambda.min = cv.en$lambda.min))
+}
+```
+
+```{r}
+row.names(results_en) = seq_len(nrow(results_en))
+results_en
+```
+
+```{r}
+# Alpha vs. MSE plot
+plot(results_en$alpha, results_en$mse, xaxt = 'n')
+axis(1, at = seq(0, 1, by = 0.1), labels = TRUE)
+min.mse.index = which.min(results_en$mse)
+points(results_en$alpha[min.mse.index], min(results_en$mse), col = "red", pch = 19)
+```
+
+```{r}
+best_alpha_en = results_en$alpha[which.min(results_en$mse)]
+lambda_en = results_en$lambda.min[which.min(results_en$mse)]
+paste("The best alpha for Elastic Net is:", best_alpha_en, ", the best lambda.min for Elastic Net is:", lambda_en)
+```
+
+##### Elastic Net
+
+```{r}
+# MSE vs Lambda Plot
+set.seed(42)
+cv_en2 =  cv.glmnet(x, y, type.measure = "mse", nfolds = nrow(x), alpha = 0.1)
+plot(cv_en2)
+title("Lambda vs MSE for alpha = 0.1",line = 2.5)
+```
+
+```{r}
+en = glmnet(x, y, alpha = 0.1)
+plot(en, xvar="lambda", label = TRUE)	      
+title("Elastic Net Coefficients Plot",line = 2.5)
+```
+
+```{r}
+est_en = as.matrix(abs(coef(en, s = lambda_en)))
+est_en = as.data.frame(est_en)
+est_en %>%
+  rename("coefficient" = "s1") %>%
+  arrange(desc(coefficient))
+```
+
+The top 3 features are `Interesting`, `Uncomfortable` and `Successful`.
+
+```{r}
+# Get parameters for the table
+parameters_en = as.matrix(coef(en, s = lambda_en))
+parameters_en = as.data.frame(parameters_en)
+parameters_en = parameters_en %>%
+  rename("Elastic Net" = "s1")
+```
+
+```{r}
+en_lm = lm(y ~ Interesting + Uncomfortable + Successful, data = x_df)
+summary(en_lm)
+```
+
+All 3 features are significant.
+
+```{r}
+# Calculate the bias
+en.Successful = as.matrix(coef(en, s = lambda_en))['Successful',]
+en.Uncomfortable = as.matrix(coef(en, s = lambda_en))['Uncomfortable',]
+en.Interesting = as.matrix(coef(en, s = lambda_en))['Interesting',]
+
+lm.Uncomfortable = as.numeric(coef(en_lm)['Uncomfortable'])
+lm.Interesting = as.numeric(coef(en_lm)['Interesting'])
+lm.Successful = as.numeric(coef(en_lm)['Successful'])
+
+bias_en = tibble("Bias in Uncomfortable"=(lm.Uncomfortable-en.Uncomfortable)/lm.Uncomfortable,
+                     "Bias in Interesting"=(lm.Interesting-en.Interesting)/lm.Interesting,
+                     "Bias in Successful"=(lm.Successful - en.Successful)/lm.Successful)
+bias_en
+```
+
+##### Ridge
+
+```{r}
+ridge = glmnet(x, y, alpha = 0)
+plot(ridge, xvar="lambda", label = TRUE)	      
+title("Ridge Coefficients Plot",line = 2.5)
+```
+
+```{r}
+cv_ridge = cv.glmnet(x, y, type.measure = "mse", nfolds = nrow(x), alpha = 0)
+plot(cv_ridge)
+title("Lambda vs MSE for Ridge",line = 2.5)
+lambda_ridge = cv_ridge$lambda.min
+```
+
+```{r}
+est_ridge = as.matrix(abs(coef(ridge, s = lambda_ridge)))
+est_ridge = as.data.frame(est_ridge)
+est_ridge %>%
+  rename("coefficient" = "s1") %>%
+  arrange(desc(coefficient))
+```
+
+The top 3 features are `Poor Value`, `Interesting` and `Uncomfortable`.
+
+```{r}
+# Get parameters for the table
+parameters_ridge = as.matrix(coef(ridge, s = lambda_ridge))
+parameters_ridge = as.data.frame(parameters_ridge)
+parameters_ridge = parameters_ridge %>%
+  rename("Ridge" = "s1")
+```
+
+```{r}
+ridge_lm = lm(y ~ `Poor Value` + Interesting + Uncomfortable, data = x_df)
+summary(ridge_lm)
+```
+
+Only `Uncomfortable` is significant.
+
+```{r}
+# Calculate the bias
+ridge.PoorValue = as.matrix(coef(ridge, s = lambda_ridge))['Poor Value',]
+ridge.Interesting = as.matrix(coef(ridge, s = lambda_ridge))['Interesting',]
+ridge.Uncomfortable = as.matrix(coef(ridge, s = lambda_ridge))['Uncomfortable',]
+
+lm.PoorValue = as.numeric(coef(ridge_lm)[2])
+lm.Interesting = as.numeric(coef(ridge_lm)['Interesting'])
+lm.Uncomfortable = as.numeric(coef(ridge_lm)['Uncomfortable'])
+
+bias_ridge = tibble("Bias in Poor Value"=(lm.PoorValue-ridge.PoorValue)/lm.PoorValue,
+                     "Bias in Interesting"=(lm.Interesting-ridge.Interesting)/lm.Interesting,
+                     "Bias in Uncomfortable"=(lm.Uncomfortable - ridge.Uncomfortable)/lm.Uncomfortable)
+bias_ridge
+```
+
+##### Lasso
+
+```{r}
+lasso = glmnet(x, y, alpha = 1)
+plot(lasso, xvar="lambda", label = TRUE)	      
+title("Lasso Coefficients Plot",line = 2.5)
+```
+
+```{r}
+cv_lasso =  cv.glmnet(x, y, type.measure = "mse", nfolds = nrow(x), alpha = 1)
+plot(cv_lasso)
+title("Lambda vs MSE for Lasso",line = 2.5)
+lambda_lasso = cv_lasso$lambda.min
+```
+
+
+```{r}
+est_lasso = as.matrix(abs(coef(lasso, s = lambda_lasso)))
+est_lasso = as.data.frame(est_lasso)
+est_lasso %>%
+  rename("coefficient" = "s1") %>%
+  arrange(desc(coefficient))
+```
+
+The top 3 features are `Interesting`, `Successful` and `Uncomfortable`.
+
+```{r}
+# Get parameters for the table
+parameters_lasso = as.matrix(coef(lasso, s = lambda_lasso))
+parameters_lasso = as.data.frame(parameters_lasso)
+parameters_lasso = parameters_lasso %>%
+  rename("Lasso" = "s1")
+```
+
+```{r}
+lasso_lm = lm(y ~ Interesting + Successful + Uncomfortable, data = x_df)
+summary(lasso_lm)
+```
+
+All 3 features are significant.
+
+```{r}
+# Calculate the bias
+lasso.Interesting = as.matrix(coef(lasso, s = lambda_lasso))['Interesting',]
+lasso.Successful = as.matrix(coef(lasso, s = lambda_lasso))['Successful',]
+lasso.Uncomfortable = as.matrix(coef(lasso, s = lambda_lasso))['Uncomfortable',]
+
+lm.Interesting = as.numeric(coef(lasso_lm)['Interesting'])
+lm.Successful = as.numeric(coef(lasso_lm)['Successful'])
+lm.Uncomfortable = as.numeric(coef(lasso_lm)['Uncomfortable'])
+
+bias_lasso = tibble("Bias in Interesting"=(lm.Interesting-lasso.Interesting)/lm.Interesting,
+                    "Bias in Successful"=(lm.Successful-lasso.Successful)/lm.Successful,
+                     "Bias in Uncomfortable"=(lm.Uncomfortable - lasso.Uncomfortable)/lm.Uncomfortable)
+bias_lasso
+```
+
+#### Parameter dataframe
+
+```{r}
+p_en = parameters_en
+p_en$Parameter_Name = row.names(parameters_en)
+p_r = parameters_ridge
+p_r$Parameter_Name = row.names(parameters_ridge)
+p_l = parameters_lasso
+p_l$Parameter_Name = row.names(parameters_lasso)
+```
+
+```{r}
+parameters = p_en %>%
+  inner_join(p_r, by = "Parameter_Name") %>%
+  inner_join(p_l, by = "Parameter_Name") %>%
+  relocate(Parameter_Name)
+```
+
+```{r}
+parameters
+```
+
